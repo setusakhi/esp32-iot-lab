@@ -1,0 +1,11 @@
+# Private: Spotify keys and login (see voice-server/spotify_config.example.json)
+voice-server/spotify_config.json
+voice-server/spotify_token.json
+
+# Personal voice recordings saved by the voice server
+voice-server/recordings/
+
+# Python
+voice-server/.venv/
+__pycache__/
+*.pyc
