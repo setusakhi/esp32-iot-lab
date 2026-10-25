@@ -29,6 +29,10 @@
 #define VOICE_SERVER_URL   "http://192.168.1.8:5005"
 #define VOICE_RECORD_SECS  3
 
+// ---- Screensaver: clock and night sky after this many minutes without input ----
+// The radio keeps playing; any touch, the touch button or the knob wakes the screen.
+#define SCREENSAVER_MINUTES  2       // 0 = never
+
 // ---- Touch button (TTP223): tap = talk, long press = stop and go home ----
 // VCC to 3V3, GND to GND, OUT to GPIO 27
 #define TOUCH_BTN_PIN  27

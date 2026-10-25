@@ -8,6 +8,7 @@ struct App {
   void (*exit)();                                   // clean up when leaving
   void (*update)();                                 // called continuously
   void (*touch)(TouchEvent ev, int16_t x, int16_t y);
+  void (*redraw)();   // after the screensaver; leave out if enter() only draws
 };
 
 extern App menuApp, radioApp, calcApp, clockApp, timerApp, pianoApp, voiceApp;
@@ -37,4 +38,7 @@ void timerAddSeconds(uint32_t secs);
 
 // Touch button: open the Voice screen and listen now (from any screen)
 void voiceListenNow();
-void voiceBegin();            // reserves the recording buffer; call once in setup()
+
+// For the screensaver: what the radio is playing ("" when it is not)
+String radioStationName();
+String radioSongTitle();

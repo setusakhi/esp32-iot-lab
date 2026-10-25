@@ -67,13 +67,10 @@ static void voiceEnter() {
   tft.drawString("Try: \"Play Vividh Bharati\"  \"Next station\"  \"What time is it\"  \"25 times 4\"",
                  SCREEN_W / 2, 296, 2);
   nextApp = nullptr;
-}
 
-// The recording buffer is reserved once at start-up and kept. Allocating it later
-// failed after the radio had played (memory too fragmented), which silently cut
-// commands to 2 seconds. It is mu-law (48 KB for 3 s): a 16-bit buffer (96 KB)
-// left too little memory for the radio's HTTPS connection.
-void voiceBegin() {
+  // Reserved only while this screen is open: the radio needs that memory for its
+  // decoders (kept permanently, every station failed to start). In mu-law, 3 s is
+  // 48 KB, which still fits after the radio has played (a 16-bit 96 KB one did not).
   for (int secs = VOICE_RECORD_SECS; secs >= 2 && !recording; secs--) {
     recordLen = MIC_SAMPLE_RATE * secs;
     recording = (uint8_t *)malloc(recordLen);
@@ -83,6 +80,8 @@ void voiceBegin() {
 }
 
 static void voiceExit() {
+  free(recording);
+  recording = nullptr;
   listenSoon = false;
   returnApp = nullptr;
   resumeRadio = false;

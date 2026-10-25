@@ -134,16 +134,25 @@ static void centerMessage(const char *msg, uint16_t col) {
   tft.drawString(msg, SCREEN_W / 2, 170, 4);
 }
 
-// Makes sure the current tab's list is there (the Hindi one comes from the internet)
+// Downloads the Hindi list. Needs its own secure connection, and there isn't memory for
+// two at once: with a station playing it crashed (abort), so the radio is stopped first.
+static bool fetchHindi() {
+  if (!lists[TAB_HINDI].empty()) return true;
+  bool wasRunning = radioActive();
+  if (wasRunning) { radioStop(); playing = playingTab = -1; }
+  centerMessage("Loading Hindi stations...", TFT_YELLOW);
+  bool ok = stationsFetch(lists[TAB_HINDI]);
+  if (wasRunning) { radioStart(); radioSetVolume(volume); }
+  return ok;
+}
+
+// Makes sure the current tab's list is there
 static bool loadTab() {
   fillFixed(lists[TAB_AIR], AIR_NEWS_STATIONS);
   fillFixed(lists[TAB_BHAKTI], BHAKTI_STATIONS);
-  if (tab == TAB_HINDI && lists[TAB_HINDI].empty()) {
-    centerMessage("Loading Hindi stations...", TFT_YELLOW);
-    if (!stationsFetch(lists[TAB_HINDI])) {
-      centerMessage("Could not load stations. Tap to retry", TFT_ORANGE);
-      return false;
-    }
+  if (tab == TAB_HINDI && !fetchHindi()) {
+    centerMessage("Could not load stations. Tap to retry", TFT_ORANGE);
+    return false;
   }
   return true;
 }
@@ -182,6 +191,7 @@ static void radioEnter() {
   int t, i;
   fillFixed(lists[TAB_AIR], AIR_NEWS_STATIONS);
   fillFixed(lists[TAB_BHAKTI], BHAKTI_STATIONS);
+  fetchHindi();          // now, before the radio connects (failure is handled by loadTab)
   if (want.length() && findStation(want, t, i)) tab = t;
   drawTabs();
   if (!loadTab()) return;
@@ -242,6 +252,23 @@ void radioTogglePause() {
   drawNowPlaying();
 }
 
+// ---- Screensaver ----
+
+String radioStationName() {
+  if (!radioActive() || playing < 0 || radioStatus() != RADIO_PLAYING) return "";
+  return lists[playingTab][playing].name;
+}
+
+String radioSongTitle() { return radioStationName().length() ? String(songTitle) : String(""); }
+
+// Draws the screen again without touching the stream (enter() would restart it)
+static void radioRedraw() {
+  drawTopBar("Radio");
+  drawTabs();
+  if (ready) drawAll();
+  else centerMessage("Tap to retry", TFT_ORANGE);
+}
+
 static void radioExit() {
   if (radioActive()) {
     centerMessage("Stopping radio...", COL_DIM);
@@ -291,4 +318,4 @@ static void radioTouch(TouchEvent ev, int16_t x, int16_t y) {
   else if (VOL_DOWN.contains(x, y) && volume > 0) { radioSetVolume(--volume); drawVolume(); }
 }
 
-App radioApp = {radioEnter, radioExit, radioUpdate, radioTouch};
+App radioApp = {radioEnter, radioExit, radioUpdate, radioTouch, radioRedraw};

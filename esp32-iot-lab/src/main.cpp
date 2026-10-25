@@ -14,6 +14,7 @@
 #include "net.h"
 #include "mic.h"
 #include "input.h"
+#include "screensaver.h"
 
 static App *current = nullptr;
 static App *pending = nullptr;
@@ -21,10 +22,32 @@ static App *pending = nullptr;
 void goToApp(App *app) { pending = app; }
 App *currentApp() { return current; }
 
+// ---------------- Screensaver ----------------
+static uint32_t lastActivity = 0;
+
+static void markActivity() { lastActivity = millis(); }
+
+// Back from the screensaver to the screen underneath (the radio kept playing)
+static void wakeScreen() {
+  saverStop();
+  markActivity();
+  if (current->redraw) current->redraw();
+  else if (current->enter) current->enter();
+}
+
+static void serviceSaver() {
+  if (saverActive() && timerAlarmActive()) { wakeScreen(); return; }   // show the ringing timer
+  if (saverActive() || SCREENSAVER_MINUTES == 0) return;
+  if (current == &voiceApp || timerAlarmActive()) { markActivity(); return; }
+  if (millis() - lastActivity > SCREENSAVER_MINUTES * 60000UL) saverStart();
+}
+
 static void switchIfPending() {
   if (!pending) return;
   App *next = pending;
   pending = nullptr;
+  if (saverActive()) saverStop();
+  markActivity();
   if (current && current->exit) current->exit();
   current = next;
   tft.fillScreen(COL_BG);
@@ -124,6 +147,13 @@ static void handleControls() {
   inputService();
 
   TouchPress press = touchTake();
+  int steps = knobTakeSteps();
+  bool knobPressed = knobTakePress();
+  if (press != PRESS_NONE || steps || knobPressed) {
+    markActivity();
+    if (saverActive()) { wakeScreen(); return; }   // the first input only wakes the screen
+  }
+
   if (press != PRESS_NONE) Serial.printf("Touch button: %s\n", press == PRESS_TAP ? "tap" : "long press");
   if (press == PRESS_TAP) {
     if (timerAlarmActive()) timerAlarmStop();
@@ -134,7 +164,6 @@ static void handleControls() {
     goToApp(&menuApp);         // leaving the radio screen stops the radio
   }
 
-  int steps = knobTakeSteps();
   if (steps) Serial.printf("Knob: %+d\n", steps);
   if (steps && current == &radioApp) {
     radioAdjustVolume(steps);
@@ -144,7 +173,7 @@ static void handleControls() {
     saveVolumeAt = millis() + 2000;
   }
 
-  if (knobTakePress()) {
+  if (knobPressed) {
     Serial.println("Knob: pressed");
     if (current == &radioApp) radioTogglePause();
     else if (current != &menuApp) { clickSound(); goToApp(&menuApp); }
@@ -171,7 +200,6 @@ void setup() {
     prefs.end();
   }
   micBegin();
-  voiceBegin();                // before WiFi and radio take memory
   inputBegin();
   pinMode(0, INPUT_PULLUP);    // BOOT button: push-to-talk on the Voice screen
   setupTouch();
@@ -221,7 +249,9 @@ void loop() {
       uint16_t rx, ry;
       tft.getTouchRaw(&rx, &ry);
       Serial.printf("Touch at x=%u y=%u  (raw %u,%u  z=%u)\n", x, y, rx, ry, tft.getTouchRawZ());
-      if (timerAlarmActive()) { timerAlarmStop(); swallow = true; }
+      markActivity();
+      if (saverActive()) { wakeScreen(); swallow = true; }        // this touch only wakes
+      else if (timerAlarmActive()) { timerAlarmStop(); swallow = true; }
       else current->touch(TOUCH_DOWN, x, y);
     } else if (!swallow) {
       current->touch(TOUCH_MOVE, x, y);
@@ -234,7 +264,9 @@ void loop() {
 
   handleControls();
   timerService();
-  if (current->update) current->update();
+  serviceSaver();
+  if (saverActive()) saverUpdate();          // the screen underneath does not draw meanwhile
+  else if (current->update) current->update();
   switchIfPending();
   delay(5);
 }
