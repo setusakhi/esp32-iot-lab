@@ -1,10 +1,12 @@
 #include "radio.h"
+#include "radio_lists.h"
 #include "gadget_config.h"
 #include "tones.h"
 #include <Audio.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 
 // ---------------- Stream player task ----------------
 
@@ -142,8 +144,52 @@ static String cleanName(const String &in) {
   return s;
 }
 
+// The last list that loaded is kept in flash ("name<TAB>bitrate<TAB>url" lines), so the
+// Hindi tab still works when radio-browser.info is down (in October 2026 five of its six
+// mirrors refused connections for a while).
+static void saveStations(const std::vector<Station> &list) {
+  String blob;
+  for (const Station &s : list) blob += s.name + "\t" + String(s.bitrate) + "\t" + s.url + "\n";
+  Preferences p;
+  p.begin("stations", false);
+  p.putBytes("hindi", blob.c_str(), blob.length());
+  p.end();
+}
+
+static bool loadSavedStations(std::vector<Station> &out) {
+  Preferences p;
+  p.begin("stations", true);
+  size_t len = p.getBytesLength("hindi");
+  String blob;
+  if (len) {
+    std::vector<char> buf(len + 1, 0);
+    p.getBytes("hindi", buf.data(), len);
+    blob = buf.data();
+  }
+  p.end();
+  out.clear();
+  int start = 0;
+  while (start < (int)blob.length()) {
+    int end = blob.indexOf('\n', start);
+    if (end < 0) end = blob.length();
+    String line = blob.substring(start, end);
+    int t1 = line.indexOf('\t'), t2 = line.indexOf('\t', t1 + 1);
+    if (t1 > 0 && t2 > t1) out.push_back({line.substring(0, t1), line.substring(t2 + 1), line.substring(t1 + 1, t2).toInt()});
+    start = end + 1;
+  }
+  if (out.empty()) {                         // nothing saved yet: the built-in few
+    for (const FixedStation &s : DEFAULT_HINDI_STATIONS) out.push_back({s.name, s.url, 0});
+    Serial.printf("Using the built-in station list (%d stations)\n", (int)out.size());
+  } else {
+    Serial.printf("Using the saved station list (%d stations)\n", (int)out.size());
+  }
+  return !out.empty();
+}
+
 bool stationsFetch(std::vector<Station> &out) {
   static const char *hosts[] = {
+    "de2.api.radio-browser.info",
+    "fi1.api.radio-browser.info",
     "all.api.radio-browser.info",
     "de1.api.radio-browser.info",
     "nl1.api.radio-browser.info",
@@ -165,6 +211,7 @@ bool stationsFetch(std::vector<Station> &out) {
     client.setInsecure();          // public station list, no private data
     HTTPClient http;
     http.useHTTP10(true);          // simple stream for the JSON parser
+    http.setConnectTimeout(4000);  // a dead mirror shouldn't hold us up long
     http.setTimeout(10000);
     http.setUserAgent("IoTLab-Radio/1.0");
     if (!http.begin(client, url)) continue;
@@ -197,7 +244,7 @@ bool stationsFetch(std::vector<Station> &out) {
       out.push_back({name, u, br});
       if (out.size() >= RADIO_MAX_STATIONS) break;
     }
-    if (!out.empty()) return true;
+    if (!out.empty()) { saveStations(out); return true; }
   }
-  return false;
+  return loadSavedStations(out);   // directory unreachable: use the last list we had
 }

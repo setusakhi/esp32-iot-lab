@@ -18,6 +18,15 @@ static const FixedStation AIR_NEWS_STATIONS[] = {
   {"Hindi News",     "https://replaynewshi.ice.infomaniak.ch/replaynewshi-128.mp3"},
 };
 
+// Used for the "Hindi" tab only when radio-browser.info can't be reached and no list
+// was saved yet (its servers, or the internet provider, sometimes block it).
+static const FixedStation DEFAULT_HINDI_STATIONS[] = {
+  {"Hindi Gold Radio",      "https://azuracast.vibesounds.in:8010/radio.mp3"},
+  {"Mirchi Top 20",         "https://drive.uber.radio/uber/bollywoodnow/icecast.audio"},
+  {"AR Radio",              "https://free.rcast.net/200660"},
+  {"Lata Mangeshkar Radio", "https://stream.zeno.fm/87xam8pf7tzuv"},
+};
+
 static const FixedStation BHAKTI_STATIONS[] = {
   {"Golden Temple Kirtan", "https://live.sgpc.net:8443/;stream.mp3"},
   {"Gurbani Kirtan",       "https://gurbanikirtan.radioca.st/start.mp3"},
