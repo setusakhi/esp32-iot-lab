@@ -25,3 +25,16 @@ void timerStartSeconds(uint32_t secs);   // set and start (used by voice command
 void radioAutoPlay();
 // Voice command "play Vividh Bharati": the radio screen opens that station's tab and plays it.
 void radioPlayStation(const char *name);
+// Knob on the radio screen: volume, and pause / play the last station
+void radioAdjustVolume(int steps);
+void radioTogglePause();
+// Voice: "next/previous station" (plays when the radio screen opens), "volume up/down"
+void radioRequestStep(int delta);
+void radioRequestVolume(int delta);
+// Voice: "stop the timer", "add 2 minutes"
+void timerCancel();
+void timerAddSeconds(uint32_t secs);
+
+// Touch button: open the Voice screen and listen now (from any screen)
+void voiceListenNow();
+void voiceBegin();            // reserves the recording buffer; call once in setup()

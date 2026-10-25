@@ -30,8 +30,13 @@ static bool ready = false;          // radio running and the current tab's list 
 static bool autoPlay = false;       // start the last station on enter (voice command)
 static String requested;            // station asked for by voice ("Vividh Bharati")
 
+static int stepRequest = 0;         // "next/previous station": move from the last one
+static int volumeRequest = 0;       // "volume up/down" said while away from this screen
+
 void radioAutoPlay() { autoPlay = true; }
 void radioPlayStation(const char *name) { requested = name; }
+void radioRequestStep(int delta) { stepRequest = delta; autoPlay = true; }
+void radioRequestVolume(int delta) { volumeRequest += delta; }
 
 static std::vector<Station> &current() { return lists[tab]; }
 
@@ -163,7 +168,8 @@ static void radioEnter() {
   ready = false;
   Preferences p;
   p.begin("settings", true);
-  volume = p.getUChar("radioVol", RADIO_DEFAULT_VOLUME);
+  volume = constrain(p.getUChar("radioVol", RADIO_DEFAULT_VOLUME) + volumeRequest, 0, 21);
+  volumeRequest = 0;
   tab = p.getUChar("radioTab", TAB_HINDI) % TAB_COUNT;
   String last = p.getString("radioLast", "");
   p.end();
@@ -186,6 +192,11 @@ static void radioEnter() {
   radioSetVolume(volume);
   if (want.length() || autoPlay) {
     if (!findStation(want, t, i)) { t = tab; i = 0; }   // not found: first station of the tab
+    else if (stepRequest && !lists[t].empty()) {        // next / previous within that tab
+      int n = lists[t].size();
+      i = ((i + stepRequest) % n + n) % n;
+    }
+    stepRequest = 0;
     if (!lists[t].empty()) {
       tab = t;
       page = i / PER_PAGE;
@@ -198,6 +209,37 @@ static void radioEnter() {
   if (page >= pageCount()) page = 0;
   drawAll();
   ready = true;
+}
+
+// ---- Knob, while the radio screen is open ----
+
+void radioAdjustVolume(int steps) {
+  if (!ready) return;
+  volume = constrain((int)volume + steps, 0, 21);
+  radioSetVolume(volume);
+  drawVolume();
+}
+
+void radioTogglePause() {
+  if (!ready) return;
+  if (playing >= 0) {
+    radioPause();
+    playing = playingTab = -1;
+  } else {                            // play the last station again
+    Preferences p;
+    p.begin("settings", true);
+    String last = p.getString("radioLast", "");
+    p.end();
+    int t, i;
+    if (!findStation(last, t, i)) { t = tab; i = 0; }
+    if (lists[t].empty()) return;
+    tab = t;
+    page = i / PER_PAGE;
+    playStation(t, i);
+    drawTabs();
+  }
+  drawStations();
+  drawNowPlaying();
 }
 
 static void radioExit() {

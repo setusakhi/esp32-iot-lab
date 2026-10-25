@@ -12,6 +12,7 @@
 #define DEFAULT_VOLUME     5        // beeps and piano: 0..10
 
 // ---- Microphone (INMP441, uses the second I2S port) ----
+// Only for env:mictest; not wired now (32 and 33 are used by the knob below).
 // VDD to 3V3 (not 5V), GND to GND, L/R to GND
 #define MIC_SCK_PIN    32
 #define MIC_WS_PIN     33
@@ -27,6 +28,17 @@
 // Your laptop's WiFi address (ipconfig) and the server port
 #define VOICE_SERVER_URL   "http://192.168.1.8:5005"
 #define VOICE_RECORD_SECS  3
+
+// ---- Touch button (TTP223): tap = talk, long press = stop and go home ----
+// VCC to 3V3, GND to GND, OUT to GPIO 27
+#define TOUCH_BTN_PIN  27
+
+// ---- Rotary encoder (KY-040): turn = volume, press = pause/play or home ----
+// + to 3V3 (not 5V), GND to GND, CLK 32, DT 33, SW 14
+#define ENC_CLK_PIN    32
+#define ENC_DT_PIN     33
+#define ENC_SW_PIN     14
+#define ENC_REVERSE    false        // true if turning right makes it quieter
 
 // ---- WiFi setup ----
 // With no saved WiFi, the gadget creates this hotspot.

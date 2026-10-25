@@ -66,6 +66,21 @@ void timerStartSeconds(uint32_t secs) {
   running = true;
 }
 
+void timerCancel() {
+  if (alarmOn) timerAlarmStop();
+  running = false;
+  remainMs = setMs;
+  shownSecs = -1;
+}
+
+// Extends a running timer; with none running, starts one of that length
+void timerAddSeconds(uint32_t secs) {
+  if (!running) { timerStartSeconds(secs); return; }
+  uint32_t left = min((uint32_t)(timeLeft() + secs * 1000UL), MAX_MS);
+  endAt = millis() + left;
+  shownSecs = -1;
+}
+
 // ---- screen ----
 static void drawStartButton() {
   drawButton(START_BTN, running ? "Pause" : "Start", running ? TFT_ORANGE : 0x256C);

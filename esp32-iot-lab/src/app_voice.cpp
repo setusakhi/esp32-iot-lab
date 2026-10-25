@@ -4,18 +4,34 @@
 #include "mic.h"
 #include "net.h"
 #include "tones.h"
+#include "radio.h"
 #include "gadget_config.h"
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 
 static const int  MIC_X = SCREEN_W / 2, MIC_Y = 130, MIC_R = 52;
 static const Rect MIC_BTN = {MIC_X - MIC_R, MIC_Y - MIC_R, MIC_R * 2, MIC_R * 2};
 static const int  BOOT_BTN = 0;
 
-static int16_t *recording = nullptr;
+static uint8_t *recording = nullptr;    // mu-law, 1 byte per sample
 static int      recordLen = 0;
 static App     *nextApp = nullptr;      // where the command takes us
 static uint32_t nextAt = 0;
+
+// Touch button: listen from any screen, then go back there (and resume the radio)
+static bool listenSoon = false;
+static App *returnApp = nullptr;
+static bool resumeRadio = false;
+
+void voiceListenNow() {
+  listenSoon = true;
+  App *from = currentApp();
+  if (from == &voiceApp) return;
+  returnApp = (from == &menuApp) ? nullptr : from;
+  resumeRadio = (from == &radioApp && radioActive() && radioStatus() == RADIO_PLAYING);
+  goToApp(&voiceApp);                  // leaving the radio stops it, so the mic hears only you
+}
 
 static void drawMic(uint16_t color) {
   tft.fillCircle(MIC_X, MIC_Y, MIC_R, color);
@@ -45,25 +61,31 @@ static bool isAscii(const char *s) {
 static void voiceEnter() {
   drawTopBar("Voice");
   drawMic(0x34DB);
-  drawLines("Tap the mic and speak", TFT_WHITE, "or press the BOOT button");
+  drawLines("Tap the mic and speak", TFT_WHITE, "or touch the talk button");
   tft.setTextColor(COL_DIM);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("Try: \"Play Arijit Singh\"  \"Next\"  \"Volume up\"  \"Stop\"  \"Timer 5 minutes\"",
+  tft.drawString("Try: \"Play Vividh Bharati\"  \"Next station\"  \"What time is it\"  \"25 times 4\"",
                  SCREEN_W / 2, 296, 2);
   nextApp = nullptr;
+}
 
-  // Biggest recording that fits (the radio is off on this screen)
+// The recording buffer is reserved once at start-up and kept. Allocating it later
+// failed after the radio had played (memory too fragmented), which silently cut
+// commands to 2 seconds. It is mu-law (48 KB for 3 s): a 16-bit buffer (96 KB)
+// left too little memory for the radio's HTTPS connection.
+void voiceBegin() {
   for (int secs = VOICE_RECORD_SECS; secs >= 2 && !recording; secs--) {
     recordLen = MIC_SAMPLE_RATE * secs;
-    recording = (int16_t *)malloc(recordLen * sizeof(int16_t));
+    recording = (uint8_t *)malloc(recordLen);
   }
   Serial.printf("Voice: buffer %s, %d samples, free heap %u\n",
                 recording ? "OK" : "FAILED", recordLen, ESP.getFreeHeap());
 }
 
 static void voiceExit() {
-  free(recording);
-  recording = nullptr;
+  listenSoon = false;
+  returnApp = nullptr;
+  resumeRadio = false;
 }
 
 // Plays the spoken reply (path from the server, e.g. "/say/3") through the speaker
@@ -76,15 +98,14 @@ static void speak(const char *path) {
   http.end();
 }
 
-// Asks the server to pause Spotify while we record, so the mic hears the command
-// and not the song. It resumes the music after the command.
-static void pauseMusicNearby() {
-  HTTPClient http;
-  http.begin(VOICE_SERVER_URL "/listen-start");
-  http.setTimeout(3000);
-  bool paused = http.GET() == 200 && http.getString().indexOf("\"paused\": true") >= 0;
-  http.end();
-  if (paused) delay(600);              // the phone takes a moment to actually go quiet
+// "Volume up/down" changes the radio when we go back to it, else the beeps and replies
+static void changeVolume(int amount, bool forRadio) {
+  if (forRadio) { radioRequestVolume(amount); return; }
+  audioSetVolume(constrain((int)audioGetVolume() + (amount > 0 ? 2 : -2), 0, 10));
+  Preferences prefs;
+  prefs.begin("settings", false);
+  prefs.putUChar("toneVol", audioGetVolume());
+  prefs.end();
 }
 
 // Sends the recording to the laptop and acts on the answer
@@ -94,9 +115,9 @@ static void sendAndAct() {
 
   HTTPClient http;
   http.begin(VOICE_SERVER_URL "/listen");
-  http.addHeader("Content-Type", "application/octet-stream");
+  http.addHeader("Content-Type", "audio/basic");   // 8-bit mu-law
   http.setTimeout(20000);
-  int code = http.POST((uint8_t *)recording, recordLen * sizeof(int16_t));
+  int code = http.POST(recording, recordLen);
   String body = code == 200 ? http.getString() : String();
   http.end();
 
@@ -120,15 +141,27 @@ static void sendAndAct() {
   if (heard.length() > 60) heard = heard.substring(0, 57) + "...";
   bool understood = strcmp(action, "unknown") != 0;
   drawLines(reply, understood ? TFT_GREEN : TFT_ORANGE, heard.c_str());
+  bool forRadio = resumeRadio || returnApp == &radioApp;
+  if (!strcmp(action, "volume_up") || !strcmp(action, "volume_down"))
+    changeVolume(doc["amount"] | 0, forRadio);       // before speaking, so the reply sounds at the new level
   speak(doc["say"] | "");
 
   if (!strcmp(action, "radio"))       { radioAutoPlay(); nextApp = &radioApp; }
   else if (!strcmp(action, "station")) { radioPlayStation(doc["station"] | ""); nextApp = &radioApp; }
+  else if (!strcmp(action, "radio_next")) { radioRequestStep(1); nextApp = &radioApp; }
+  else if (!strcmp(action, "radio_prev")) { radioRequestStep(-1); nextApp = &radioApp; }
   else if (!strcmp(action, "time") || !strcmp(action, "weather")) nextApp = &clockApp;
   else if (!strcmp(action, "timer"))  { if (seconds > 0) timerStartSeconds(seconds); nextApp = &timerApp; }
+  else if (!strcmp(action, "timer_add")) { timerAddSeconds(seconds); nextApp = &timerApp; }
+  else if (!strcmp(action, "timer_cancel")) timerCancel();
   else if (!strcmp(action, "calculator")) nextApp = &calcApp;
   else if (!strcmp(action, "piano"))  nextApp = &pianoApp;
   else if (!strcmp(action, "menu") || !strcmp(action, "stop")) nextApp = &menuApp;
+  // "answer" (sums, hello...), volume, timer stop: stay, or go back to where we were
+  if (!nextApp && returnApp) {
+    if (resumeRadio) radioAutoPlay();
+    nextApp = returnApp;
+  }
   nextAt = millis() + 500;             // a moment to read the answer
 }
 
@@ -136,8 +169,6 @@ static void listen() {
   if (!recording) { drawLines("Not enough memory to record", TFT_RED); return; }
   if (!netOnline()) { drawLines("Offline - use WiFi Setup first", TFT_ORANGE); return; }
 
-  drawLines("Get ready...", TFT_YELLOW);
-  pauseMusicNearby();
   audioPlayNote(880, 90);              // "speak now" beep
   delay(200);                          // so the beep is not recorded
   drawMic(TFT_RED);
@@ -149,6 +180,7 @@ static void listen() {
 
 static void voiceUpdate() {
   if (nextApp && millis() >= nextAt) { goToApp(nextApp); nextApp = nullptr; return; }
+  if (listenSoon && !nextApp) { listenSoon = false; listen(); return; }
   if (digitalRead(BOOT_BTN) == LOW && !nextApp) {
     while (digitalRead(BOOT_BTN) == LOW) delay(10);
     listen();

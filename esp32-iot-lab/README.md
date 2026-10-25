@@ -19,8 +19,12 @@ Same as the touch piano project, nothing new:
 - **Display:** VCC 3V3, GND, CS 15, RESET 4, D/C 2, SDI 23, SCK 18, LED 3V3, SDO not connected,
   T_CLK 18, T_CS 21, T_DIN 23, T_DO 19
 - **Amplifier MAX98357A:** VIN 5V, GND, BCLK 26, LRC 25, DIN 22
-- **Microphone INMP441:** VDD 3V3 (not 5V), GND, SCK 32, WS 33, SD 34, L/R to GND
-- **Microphone MAX9814 (analog, instead of INMP441):** VDD 3V3, GND, OUT 35; GAIN and AR not connected
+- **Microphone MAX9814 (analog):** VDD 3V3, GND, OUT 35; GAIN and AR not connected
+- **Touch button TTP223:** VCC 3V3, GND, OUT 27. Tap = talk from any screen, long press = stop and go home
+- **Rotary encoder KY-040:** + 3V3 (not 5V), GND, CLK 32, DT 33, SW 14. Turn = volume, press =
+  pause/play on the radio screen, else home (set `ENC_REVERSE` in `gadget_config.h` if it turns the wrong way)
+- *(Microphone INMP441, only for env:mictest: VDD 3V3, GND, SCK 32, WS 33, SD 34, L/R to GND;
+  it shares 32/33 with the encoder, so unplug the encoder for that test)*
 
 ## Upload
 1. Open this folder in VS Code (File → Open Folder → `esp32-iot-lab`).

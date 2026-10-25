@@ -3,7 +3,7 @@
 //  Home menu with: Internet Radio, Calculator, Clock & Weather,
 //  Timer, Piano, WiFi Setup and Voice commands.
 //  Hardware: ESP32 DevKit V1, 3.5" SPI touch TFT, MAX98357A amp,
-//            MAX9814 microphone
+//            MAX9814 microphone, TTP223 touch button, rotary encoder
 // ============================================================
 #include <Arduino.h>
 #include <Preferences.h>
@@ -13,6 +13,7 @@
 #include "tones.h"
 #include "net.h"
 #include "mic.h"
+#include "input.h"
 
 static App *current = nullptr;
 static App *pending = nullptr;
@@ -112,12 +113,66 @@ static void setupTouch() {
   }
 }
 
+// ---------------- Touch button and knob ----------------
+// Touch tap: talk (or silence the alarm). Long touch: stop and go home.
+// Knob: volume (radio on its screen, else beeps and spoken replies);
+// press: pause/play on the radio screen, else back to home.
+
+static uint32_t saveVolumeAt = 0;
+
+static void handleControls() {
+  inputService();
+
+  TouchPress press = touchTake();
+  if (press != PRESS_NONE) Serial.printf("Touch button: %s\n", press == PRESS_TAP ? "tap" : "long press");
+  if (press == PRESS_TAP) {
+    if (timerAlarmActive()) timerAlarmStop();
+    else voiceListenNow();
+  } else if (press == PRESS_LONG) {
+    if (timerAlarmActive()) timerAlarmStop();
+    audioStop();
+    goToApp(&menuApp);         // leaving the radio screen stops the radio
+  }
+
+  int steps = knobTakeSteps();
+  if (steps) Serial.printf("Knob: %+d\n", steps);
+  if (steps && current == &radioApp) {
+    radioAdjustVolume(steps);
+  } else if (steps) {
+    audioSetVolume(constrain((int)audioGetVolume() + steps, 0, 10));
+    clickSound();              // a tick at the new volume
+    saveVolumeAt = millis() + 2000;
+  }
+
+  if (knobTakePress()) {
+    Serial.println("Knob: pressed");
+    if (current == &radioApp) radioTogglePause();
+    else if (current != &menuApp) { clickSound(); goToApp(&menuApp); }
+  }
+
+  if (saveVolumeAt && millis() > saveVolumeAt) {
+    saveVolumeAt = 0;
+    Preferences prefs;
+    prefs.begin("settings", false);
+    prefs.putUChar("toneVol", audioGetVolume());
+    prefs.end();
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   tft.init();
   tft.setRotation(1);          // landscape 480 x 320
   audioBegin();
+  {
+    Preferences prefs;
+    prefs.begin("settings", true);
+    audioSetVolume(prefs.getUChar("toneVol", DEFAULT_VOLUME));
+    prefs.end();
+  }
   micBegin();
+  voiceBegin();                // before WiFi and radio take memory
+  inputBegin();
   pinMode(0, INPUT_PULLUP);    // BOOT button: push-to-talk on the Voice screen
   setupTouch();
   showMessage("Connecting to WiFi...", "Please wait");
@@ -177,6 +232,7 @@ void loop() {
     swallow = false;
   }
 
+  handleControls();
   timerService();
   if (current->update) current->update();
   switchIfPending();

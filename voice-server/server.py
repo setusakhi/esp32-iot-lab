@@ -4,15 +4,17 @@ IoT Lab voice server
 Runs on your laptop. The ESP32 gadget records a few seconds of audio and
 POSTs it here; Whisper turns it into text and we work out the command.
 
-  POST /listen   body = raw 16-bit little-endian mono PCM at 16 kHz
-                 reply = {"text": ..., "action": ..., "seconds": ..., "reply": ..., "say": "/say/N"}
+  POST /listen   body = 8-bit mu-law (Content-Type audio/basic) or 16-bit PCM, mono 16 kHz
+                 reply = {"text", "action", "seconds", "amount", "station", "reply", "say": "/say/N"}
   GET  /say/N    the reply spoken by the Windows voice: raw 16-bit mono PCM at 22050 Hz
   GET  /ping     reply = {"ok": true}
 
-Everything runs locally: no audio leaves this computer.
-Start it with:  .venv\\Scripts\\python server.py
+Everything runs locally: no audio leaves this computer (the weather comes from Open-Meteo).
+Start it with:  start-server.bat
 """
+import ast
 import json
+import operator
 import os
 import re
 import subprocess
@@ -20,91 +22,80 @@ import tempfile
 import threading
 import time
 import wave
+from datetime import datetime
 from difflib import SequenceMatcher
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
+import requests
 from faster_whisper import WhisperModel
 
-import spotify
-
 PORT = int(os.environ.get("VOICE_PORT", "5005"))
-# Tested on real gadget recordings: "small" with Hindi got ~13 of 18 phrases right in ~3 s;
-# "base" got ~3 (and auto-detect doubles the time). "base" is faster if accuracy matters less.
+# Tested on real gadget recordings: "small" understood ~12 of 16 phrases, "base" ~3.
 MODEL = os.environ.get("VOICE_MODEL", "small")
-# Commands are short English words ("play", "next", "volume up"), so listen in English:
-# singer names then come out in Roman letters, which Spotify search likes best.
+# Commands are short English words ("next station", "volume up"), so listen in English.
 # "hi" = Hindi in Devanagari; empty = detect each time (twice as slow, Hindi often comes out as Urdu).
 LANGUAGE = os.environ.get("VOICE_LANGUAGE", "en") or None
 SAMPLE_RATE = 16000
 SPEAK_RATE = 22050       # the gadget's speaker runs at this rate (AUDIO_SAMPLE_RATE)
 VOICE_NAME = os.environ.get("VOICE_SPEAKER", "Microsoft Zira Desktop")
+# Weather for "what's the weather" (same place as the gadget's clock screen)
+CITY = os.environ.get("VOICE_CITY", "Jaipur")
+CITY_LAT = float(os.environ.get("VOICE_LAT", "26.91"))
+CITY_LON = float(os.environ.get("VOICE_LON", "75.79"))
 
-# ---------------- Understanding the command ----------------
+# ---------------- Gadget screens ----------------
 
 NUMBER_WORDS = {
-    # Hindi (Devanagari)
-    "एक": 1, "दो": 2, "तीन": 3, "चार": 4, "पांच": 5, "पाँच": 5, "छह": 6, "छः": 6, "सात": 7,
-    "आठ": 8, "नौ": 9, "दस": 10, "ग्यारह": 11, "बारह": 12, "पंद्रह": 15, "बीस": 20,
-    "पच्चीस": 25, "तीस": 30, "आधा": 0.5,
-    # English numbers as Hindi mode writes them
-    "वन": 1, "टू": 2, "थ्री": 3, "फोर": 4, "फाइव": 5, "सिक्स": 6, "सेवन": 7, "एट": 8, "नाइन": 9,
-    "टेन": 10, "फिफ्टीन": 15, "ट्वेंटी": 20, "थर्टी": 30,
-    # Hindi (Latin) and English
-    "ek": 1, "do": 2, "teen": 3, "char": 4, "chaar": 4, "paanch": 5, "panch": 5, "chhe": 6,
-    "saat": 7, "aath": 8, "nau": 9, "das": 10, "pandrah": 15, "bees": 20, "tees": 30,
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
-    "nine": 9, "ten": 10, "fifteen": 15, "twenty": 20, "thirty": 30,
+    "nine": 9, "ten": 10, "fifteen": 15, "twenty": 20, "thirty": 30, "a": 1, "an": 1,
+    "half": 0.5,
+    # Hindi, in case it comes through
+    "ek": 1, "do": 2, "teen": 3, "char": 4, "paanch": 5, "panch": 5, "das": 10,
+    "एक": 1, "दो": 2, "तीन": 3, "चार": 4, "पांच": 5, "पाँच": 5, "दस": 10,
 }
 
-# Spelling varies ("मोसम", "प्यानो", "खल्कुलेटर"; in Roman letters "Moosam ke saai"),
-# so longer keywords also match similar spellings (see matches()).
+# Longer keywords also match similar spellings (see matches()), as Whisper's spelling varies
 INTENTS = [  # checked in this order
-    ("stop",       ["बंद", "बन्द", "स्टॉप", "रोको", "band", "bandh", "stop", "off"]),
-    ("timer",      ["टाइमर", "टायमर", "टाईमर", "timer", "taimar"]),
-    ("radio",      ["रेडियो", "रेडिओ", "गाना", "गाने", "संगीत", "म्यूजिक", "म्यूज़िक", "एफएम",
-                    "radio", "redio", "gaana", "gana", "gane", "gaane", "music", "fm"]),
-    ("weather",    ["मौसम", "मोसम", "वेदर", "तापमान", "mausam", "mosam", "mousam", "moosam", "mausum",
-                    "weather", "temperature"]),
-    ("time",       ["समय", "टाइम", "बजे", "घड़ी", "time", "samay", "baje", "bje", "bajhe", "bhaje",
-                    "baaje", "clock", "ghadi"]),
-    ("calculator", ["कैलकुलेटर", "कल्कुलेटर", "हिसाब", "calculator", "hisab"]),
-    ("piano",      ["पियानो", "प्यानो", "piano", "pyano"]),
-    ("menu",       ["मेन्यू", "मेनू", "होम", "वापस", "menu", "home", "wapas"]),
+    ("stop",       ["stop", "off", "pause", "band", "bandh", "बंद"]),
+    ("timer",      ["timer", "taimar", "टाइमर"]),
+    ("calculator", ["calculator", "कैलकुलेटर"]),
+    ("piano",      ["piano", "pyano", "पियानो"]),           # before radio: "play piano"
+    ("menu",       ["menu", "home", "होम"]),
+    ("radio",      ["radio", "redio", "music", "fm", "gaana", "gana", "play", "रेडियो"]),
 ]
 ALL_KEYWORDS = {w for _, words in INTENTS for w in words}
-TIME_UNIT = re.compile(r"मिनट|सेकंड|\bmin|minute|second|\bsec")
+TIME_UNIT = re.compile(r"\bmin|minute|second|\bsec|मिनट")
 
-# Shown on the gadget screen and spoken through its speaker
-REPLIES = {
+REPLIES = {  # shown on the gadget and spoken; made once at start
     "stop": "Stopping",
     "radio": "Playing the radio",
-    "weather": "Here is the weather",
-    "time": "Here is the time",
     "calculator": "Opening the calculator",
     "piano": "Opening the piano",
     "menu": "Going home",
+    "radio_next": "Next station",
+    "radio_prev": "Previous station",
+    "volume_up": "Volume up",
+    "volume_down": "Volume down",
+    "timer_cancel": "Timer stopped",
     "unknown": "Sorry, I did not understand",
     "nothing": "I heard nothing",
 }
 
 
-def to_ascii_digits(text):
-    return text.translate(str.maketrans("०१२३४५६७८९", "0123456789"))
-
-
 def find_seconds(text):
-    """Timer length from text like '5 minute', 'पांच मिनट', '30 second'."""
-    # Split on spaces: \w would cut Hindi words at their vowel signs
-    words = [w.strip(".,!?।\"'") for w in to_ascii_digits(text.lower()).split()]
+    """Length from text like '5 minutes', 'a minute', '30 seconds' (minutes if no unit)."""
+    words = [w.strip(".,!?\"'") for w in text.lower().split()]
     for i, w in enumerate(words):
         value = float(w) if re.fullmatch(r"\d+(\.\d+)?", w) else NUMBER_WORDS.get(w)
         if value is None:
             continue
         unit = " ".join(words[i + 1:i + 3])
-        if re.search(r"सेकंड|second|sec", unit):
+        if not TIME_UNIT.search(unit) and w in ("a", "an"):
+            continue                    # "a" only counts as a number before a unit
+        if re.search(r"second|sec", unit):
             return int(value)
-        return int(value * 60)          # minutes by default
+        return int(value * 60)
     return 0
 
 
@@ -118,78 +109,213 @@ def duration(secs):
     return " ".join(parts)
 
 
-def matches(keyword, text, latin_words, hindi_words):
-    if keyword.isascii():
-        words, threshold = latin_words, 0.8
-        if len(keyword) <= 4:
-            return keyword in words                # short words must match exactly
-    else:
-        if keyword in text:                        # Devanagari: substring first
-            return True
-        words, threshold = hindi_words, 0.75
-        if len(keyword) <= 4:
-            return False
-    # A word that is exactly another command's keyword ("time") is not a misspelling of this one ("timer")
-    return any(SequenceMatcher(None, keyword, w).ratio() >= threshold
+def matches(keyword, text, words):
+    if not keyword.isascii():
+        return keyword in text
+    if len(keyword) <= 4:
+        return keyword in words                    # short words must match exactly
+    # A word that is exactly another command's keyword is not a misspelling of this one
+    return any(SequenceMatcher(None, keyword, w).ratio() >= 0.8
                for w in words if w == keyword or w not in ALL_KEYWORDS)
 
 
-def timer_result(text):
-    secs = find_seconds(text)
-    if secs <= 0:
-        return {"action": "timer", "seconds": 0, "reply": "Opening the timer"}
-    return {"action": "timer", "seconds": secs, "reply": f"Timer set for {duration(secs)}"}
+def has(text, *phrases):
+    return any(re.search(r"\b" + re.escape(p) + r"\b", text) for p in phrases)
 
 
-def understand(text):
-    t = text.lower()
-    latin_words = re.findall(r"[a-z]+", t)
-    hindi_words = [w.strip(".,!?।\"'") for w in t.split() if not w.isascii()]
-    for action, words in INTENTS:
-        if any(matches(w, t, latin_words, hindi_words) for w in words):
-            if action == "timer":
-                return timer_result(text)
-            return {"action": action, "seconds": 0, "reply": REPLIES[action]}
-    if TIME_UNIT.search(t) and find_seconds(text):  # just "5 minute"
-        return timer_result(text)
-    return {"action": "unknown", "seconds": 0, "reply": REPLIES["unknown"]}
+def reply(action, text=None, **extra):
+    return dict({"action": action, "seconds": 0, "reply": text or REPLIES[action]}, **extra)
 
 
 # ---------------- Radio stations by name ----------------
-# "Play Vividh Bharati", "Play news", "Play kirtan". Names must match the gadget's lists
-# in esp32-iot-lab/src/radio_lists.h. Checked before Spotify, so "play news" isn't a song search.
+# Names must match the gadget's lists in esp32-iot-lab/src/radio_lists.h.
 STATIONS = [
     ("Vividh Bharati",       ["vividh bharati", "vividh bharti", "vivid bharati", "vivid bharti", "vividh",
-                              "akashvani", "all india radio", "विविध भारती", "आकाशवाणी"]),
-    ("Hindi News",           ["news", "khabar", "samachar", "न्यूज़", "न्यूज", "समाचार", "खबर"]),
-    ("Gurbani Kirtan",       ["gurbani", "गुरबाणी", "गुरबानी"]),     # before "kirtan" below
-    ("Golden Temple Kirtan", ["golden temple", "kirtan", "harmandir", "darbar sahib", "कीर्तन"]),
+                              "akashvani", "all india radio"]),
+    ("Hindi News",           ["news", "khabar", "samachar"]),
+    ("Gurbani Kirtan",       ["gurbani"]),                          # before "kirtan" below
+    ("Golden Temple Kirtan", ["golden temple", "kirtan", "harmandir", "darbar sahib"]),
     ("SVBC TTD Tirupati",    ["tirupati", "balaji", "venkateswara", "ttd"]),
     ("Shaiva Lahari",        ["shiva", "shiv", "shaiva", "mahadev"]),
-    ("Mahakatha Radio",      ["bhajan", "bhajans", "devotional", "bhakti", "mahakatha", "katha", "भजन"]),
+    ("Mahakatha Radio",      ["bhajan", "bhajans", "devotional", "bhakti", "mahakatha", "katha"]),
     ("Radio Sai",            ["sai baba", "radio sai", "sai ram"]),
     ("AIR Alwar",            ["alwar"]),
-    ("Jaipur Radio",         ["jaipur"]),
+    ("Jaipur Radio",         ["jaipur radio", "jaipur"]),
 ]
 
 
-def find_station(text):
-    t = text.lower()
+def find_station(t):
     for name, words in STATIONS:
-        for w in words:
-            if (w in t) if not w.isascii() else re.search(r"\b" + re.escape(w) + r"\b", t):
-                return {"action": "station", "station": name, "seconds": 0, "reply": f"Playing {name}"}
+        if has(t, *words):
+            return reply("station", f"Playing {name}", station=name)
     return None
+
+
+# ---------------- Spoken answers: time, date, weather ----------------
+
+def time_answer():
+    return f"It's {datetime.now().strftime('%I:%M %p').lstrip('0')}"
+
+
+def date_answer():
+    now = datetime.now()
+    return f"Today is {now.strftime('%A')}, {now.day} {now.strftime('%B')}"
+
+
+WEATHER_TEXT = {0: "clear sky", 1: "mostly clear", 2: "partly cloudy", 3: "cloudy", 45: "foggy",
+                48: "foggy", 51: "light drizzle", 53: "drizzle", 55: "heavy drizzle", 61: "light rain",
+                63: "rain", 65: "heavy rain", 71: "light snow", 73: "snow", 75: "heavy snow",
+                80: "rain showers", 81: "rain showers", 82: "heavy showers", 95: "a thunderstorm",
+                96: "a thunderstorm with hail", 99: "a thunderstorm with hail"}
+_weather_cache = {"at": 0, "text": None}
+
+
+def weather_answer():
+    if time.time() - _weather_cache["at"] < 600 and _weather_cache["text"]:
+        return _weather_cache["text"]
+    try:
+        r = requests.get("https://api.open-meteo.com/v1/forecast", timeout=8, params={
+            "latitude": CITY_LAT, "longitude": CITY_LON, "timezone": "auto",
+            "current": "temperature_2m,relative_humidity_2m,weather_code"})
+        cur = r.json()["current"]
+        sky = WEATHER_TEXT.get(cur["weather_code"], "mixed weather")
+        text = (f"{CITY}: {round(cur['temperature_2m'])} degrees, {sky}, "
+                f"humidity {cur['relative_humidity_2m']} percent")
+        _weather_cache.update(at=time.time(), text=text)
+        return text
+    except (requests.RequestException, KeyError, ValueError) as e:
+        print(f"Weather failed: {e}")
+        return "Here is the weather"
+
+
+# ---------------- Voice calculator ----------------
+
+OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+       ast.Div: operator.truediv, ast.Pow: operator.pow}
+SPOKEN_OP = {"+": "plus", "-": "minus", "*": "times", "/": "divided by"}
+
+
+def _evaluate(node):
+    """Safe arithmetic: numbers and + - * / ** only."""
+    if isinstance(node, ast.Expression):
+        return _evaluate(node.body)
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+    if isinstance(node, ast.BinOp) and type(node.op) in OPS:
+        right = _evaluate(node.right)
+        if isinstance(node.op, ast.Pow) and abs(right) > 10:
+            raise ValueError("power too big")
+        return OPS[type(node.op)](_evaluate(node.left), right)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        return -_evaluate(node.operand)
+    raise ValueError("not arithmetic")
+
+
+def _number(x):
+    return str(int(round(x))) if abs(x - round(x)) < 1e-9 else f"{x:.2f}".rstrip("0").rstrip(".")
+
+
+def math_answer(t):
+    """'What is 25 times 4' -> '25 times 4 is 100', or None if it isn't a sum."""
+    t = re.sub(r"(?<=\d),(?=\d{3})", "", t)                     # 1,000 -> 1000
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:%|percent)\s*of\s*(\d+(?:\.\d+)?)", t)
+    if m:
+        a, b = float(m.group(1)), float(m.group(2))
+        return f"{_number(a)} percent of {_number(b)} is {_number(a * b / 100)}"
+    m = re.search(r"square root of\s*(\d+(?:\.\d+)?)", t)
+    if m:
+        return f"The square root of {m.group(1)} is {_number(float(m.group(1)) ** 0.5)}"
+    for words, symbol in (("multiplied by", "*"), ("divided by", "/"), ("times", "*"), ("into", "*"),
+                          ("×", "*"), ("÷", "/"), (" x ", " * "), ("plus", "+"), ("minus", "-"),
+                          ("over", "/"), ("squared", "** 2"), ("cubed", "** 3")):
+        t = t.replace(words, f" {symbol} ")
+    expr = " ".join(re.findall(r"\d+(?:\.\d+)?|\*\*|[-+*/()]", t))
+    if len(re.findall(r"\d+(?:\.\d+)?", expr)) < 2 and "**" not in expr:
+        return None
+    try:
+        value = _evaluate(ast.parse(expr, mode="eval"))
+    except (ValueError, SyntaxError, ZeroDivisionError, TypeError):
+        return None
+    spoken = " ".join(SPOKEN_OP.get(tok, "to the power" if tok == "**" else tok) for tok in expr.split())
+    return f"{spoken} is {_number(value)}"
+
+
+# ---------------- Understanding the command ----------------
+
+def understand(text):
+    t = re.sub(r"\s+", " ", re.sub(r"[?!\"]", " ", text.lower())).strip().rstrip(".")
+    words = re.findall(r"[a-z]+", t)
+
+    # Small talk
+    if has(t, "thank you", "thanks", "dhanyavad", "shukriya"):
+        return reply("answer", "You're welcome")
+    if has(t, "how are you"):
+        return reply("answer", "I am fine, thank you. How can I help?")
+    if has(t, "who are you", "your name"):
+        return reply("answer", "I am IoT Lab, your voice assistant")
+    if re.match(r"(hello|hi|hey|namaste|namaskar)\b", t):
+        return reply("answer", "Hello! What can I do for you?")
+
+    # Voice calculator: "what is 25 times 4"
+    answer = math_answer(t)
+    if answer:
+        return reply("answer", answer)
+
+    # Timer controls, before plain "stop" and "timer"
+    if has(t, "timer") and has(t, "stop", "cancel", "off", "reset"):
+        return reply("timer_cancel")
+    if has(t, "add", "extend", "more") and find_seconds(t):
+        secs = find_seconds(t)
+        return reply("timer_add", f"Added {duration(secs)}", seconds=secs)
+
+    # Radio controls
+    if has(t, "next", "skip", "change station", "change the station", "change channel", "another station"):
+        return reply("radio_next")
+    if has(t, "previous", "last station", "go back to the last station"):
+        return reply("radio_prev")
+    if has(t, "volume up", "louder", "increase volume", "increase the volume", "turn it up", "turn up"):
+        return reply("volume_up", amount=3)
+    if has(t, "volume down", "softer", "quieter", "decrease volume", "decrease the volume",
+           "turn it down", "turn down", "lower the volume"):
+        return reply("volume_down", amount=-3)
+
+    station = find_station(t)
+    if station:
+        return station
+
+    # Spoken answers; the gadget also opens its clock screen
+    if has(t, "weather", "temperature", "mausam", "hot", "cold", "rain"):   # before "today"
+        return reply("weather", weather_answer())
+    if has(t, "date", "what day", "which day", "today"):
+        return reply("time", date_answer())
+    if has(t, "time", "clock", "baje", "samay"):
+        return reply("time", time_answer())
+
+    # Screens
+    for action, keywords in INTENTS:
+        if any(matches(k, t, words) for k in keywords):
+            if action == "timer":
+                return timer_result(t)
+            return reply(action)
+    if TIME_UNIT.search(t) and find_seconds(t):            # just "5 minutes"
+        return timer_result(t)
+    return reply("unknown")
+
+
+def timer_result(t):
+    secs = find_seconds(t)
+    if secs <= 0:
+        return reply("timer", "Opening the timer")
+    return reply("timer", f"Timer set for {duration(secs)}", seconds=secs)
 
 
 # ---------------- Speech to text ----------------
 
-# Words Whisper should expect. Commands only: tested on 50 recordings, adding singer names
-# here made Whisper insert them where nobody said them ("Kumar, volume down") and once
-# loop for 2 minutes. Singer names are corrected afterwards instead (spotify.KNOWN_ARTISTS).
-HINT_WORDS = ("play, stop, pause, next, previous, volume up, volume down, what's playing, radio, "
-              "weather, time, timer, minutes, seconds, piano, calculator, Spotify, "
-              "Vividh Bharati, news, kirtan, bhajan")
+# Words Whisper should expect: commands only (tested: names here made Whisper insert them
+# where nobody said them, and once loop for 2 minutes).
+HINT_WORDS = ("play, stop, next station, previous station, volume up, volume down, radio, "
+              "weather, time, date, timer, minutes, seconds, plus, minus, times, divided by, "
+              "piano, calculator, home, Vividh Bharati, news, kirtan, bhajan")
 
 print(f"Loading Whisper model '{MODEL}' (first time downloads it, please wait)...")
 model = WhisperModel(MODEL, device="cpu", compute_type="int8")
@@ -203,8 +329,7 @@ def transcribe(pcm_bytes):
         return "", peak
     audio *= 0.9 / peak                  # make quiet recordings loud enough
     # Short commands: one greedy pass, no temperature retries, few tokens.
-    # Those retries make Whisper loop on unclear audio. Hint words, though, help a lot:
-    # on real recordings they turned "अरी जी सींकर" into "अरिजीत सिंह" for ~0.7 s extra.
+    # Those retries make Whisper loop on unclear audio.
     options = dict(beam_size=1, temperature=0.0, without_timestamps=True,
                    condition_on_previous_text=False, max_new_tokens=40, hotwords=HINT_WORDS)
     segments, info = model.transcribe(audio, language=LANGUAGE or None, **options)
@@ -277,6 +402,21 @@ def save_recording(pcm, text, action):
         f.write(f"{name}\t{action}\t{text}\n")
 
 
+# ---------------- Mu-law (the gadget records 8-bit to save memory) ----------------
+
+def _ulaw_table():
+    """8-bit mu-law (ITU-T G.711) -> 16-bit sample, for all 256 values."""
+    table = np.zeros(256, dtype="<i2")
+    for code in range(256):
+        u = ~code & 0xFF
+        sample = ((((u & 0x0F) << 3) + 0x84) << ((u >> 4) & 0x07)) - 0x84
+        table[code] = -sample if u & 0x80 else sample
+    return table
+
+
+ULAW_TO_PCM = _ulaw_table()
+
+
 # ---------------- HTTP ----------------
 
 class Handler(BaseHTTPRequestHandler):
@@ -291,14 +431,6 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/ping":
             self.send_json({"ok": True})
-        elif self.path == "/listen-start":
-            # The gadget is about to record: pause Spotify so the mic hears the command, not the song
-            paused = False
-            try:
-                paused = spotify.duck()
-            except Exception as e:
-                print(f"Spotify pause failed: {e}")
-            self.send_json({"ok": True, "paused": paused})
         elif re.fullmatch(r"/say/\d+", self.path):
             n = int(self.path.rsplit("/", 1)[1])
             if n >= len(speech_audio):
@@ -322,26 +454,20 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": "bad length"}, 400)
             return
         pcm = self.rfile.read(length)
+        if self.headers.get("Content-Type", "").startswith("audio/basic"):
+            pcm = ULAW_TO_PCM[np.frombuffer(pcm, dtype=np.uint8)].tobytes()   # 8-bit mu-law from the gadget
         started = time.time()
         text, peak = transcribe(pcm)
-        if not text:
-            result = {"action": "unknown", "seconds": 0, "reply": REPLIES["nothing"]}
-        else:
-            result = find_station(text)                  # "play Vividh Bharati", "play news"
-            if not result:
-                spotify_result = spotify.handle(text)    # "play Arijit Singh", "next"...
-                result = dict(spotify_result, seconds=0) if spotify_result else understand(text)
-        try:
-            spotify.unduck(result.get("command") or result["action"])   # resume if paused for listening
-        except Exception as e:
-            print(f"Spotify resume failed: {e}")
+        heard_at = time.time()
+        result = understand(text) if text else reply("unknown", REPLIES["nothing"])
         result["text"] = text
         try:
             result["say"] = f"/say/{speech_for(result['reply'])}"
         except Exception as e:                          # the gadget still shows the reply
             print(f"Speech failed: {e}")
-        print(f"[{self.client_address[0]}] {length / 2 / SAMPLE_RATE:.1f}s audio, peak {peak:.2f}, "
-              f"{time.time() - started:.1f}s -> {text!r} => {result['action']} {result['seconds'] or ''}")
+        print(f"[{self.client_address[0]}] {len(pcm) / 2 / SAMPLE_RATE:.1f}s audio, peak {peak:.2f}, "
+              f"whisper {heard_at - started:.1f}s + answer {time.time() - heard_at:.1f}s "
+              f"-> {text!r} => {result['action']}: {result['reply']}")
         self.send_json(result)
         if SAVE_RECORDINGS:
             save_recording(pcm, text, result["action"])
@@ -352,9 +478,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print("Preparing spoken replies...")
-    for reply in REPLIES.values():
-        speech_for(reply)
-    print("Spotify: " + ("connected" if spotify.configured() else
-                         "not set up (see README: spotify.py login)"))
+    for text in REPLIES.values():
+        speech_for(text)
     print(f"Voice server listening on port {PORT} (Ctrl+C to stop)")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
