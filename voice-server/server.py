@@ -7,9 +7,12 @@ POSTs it here; Whisper turns it into text and we work out the command.
   POST /listen   body = 8-bit mu-law (Content-Type audio/basic) or 16-bit PCM, mono 16 kHz
                  reply = {"text", "action", "seconds", "amount", "station", "reply", "say": "/say/N"}
   GET  /say/N    the reply spoken by the Windows voice: raw 16-bit mono PCM at 22050 Hz
+  GET  /market   stocks, gold & currencies, fund NAVs for the Market screen (see market.py)
+  GET  /cricket  cricket scores for the Cricket screen (see cricket.py)
   GET  /ping     reply = {"ok": true}
 
-Everything runs locally: no audio leaves this computer (the weather comes from Open-Meteo).
+Everything runs locally: no audio leaves this computer (the weather comes from Open-Meteo,
+prices from Yahoo Finance and mfapi.in, cricket scores from Cricbuzz).
 Start it with:  start-server.bat
 """
 import ast
@@ -29,6 +32,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 import requests
 from faster_whisper import WhisperModel
+
+import cricket
+import market
 
 PORT = int(os.environ.get("VOICE_PORT", "5005"))
 # Tested on real gadget recordings: "small" understood ~12 of 16 phrases, "base" ~3.
@@ -268,15 +274,28 @@ def understand(text):
         secs = find_seconds(t)
         return reply("timer_add", f"Added {duration(secs)}", seconds=secs)
 
+    # Cricket and market, before the radio controls ("next match" is not "next station")
+    if has(t, "cricket", "score", "scores", "match"):
+        return reply("cricket", cricket.spoken())
+    # A name alone ("gold") is not enough when the radio is asked for: "play the Hindi gold radio"
+    if has(t, "market", "stock", "stocks", "share", "shares", "sensex") or \
+            (market.mentioned(t) and not has(t, "radio", "play", "station")):
+        return reply("market", market.spoken(t))
+
     # Radio controls
     if has(t, "next", "skip", "change station", "change the station", "change channel", "another station"):
         return reply("radio_next")
     if has(t, "previous", "last station", "go back to the last station"):
         return reply("radio_prev")
-    if has(t, "volume up", "louder", "increase volume", "increase the volume", "turn it up", "turn up"):
+    # "voice" and "sound" too: "increase the voice" was heard on 27 Oct and not understood
+    if has(t, "volume up", "louder", "increase volume", "increase the volume", "turn it up", "turn up",
+           "voice up", "increase voice", "increase the voice", "sound up", "increase sound",
+           "increase the sound"):
         return reply("volume_up", amount=3)
     if has(t, "volume down", "softer", "quieter", "decrease volume", "decrease the volume",
-           "turn it down", "turn down", "lower the volume"):
+           "turn it down", "turn down", "lower the volume", "reduce volume", "reduce the volume",
+           "voice down", "decrease voice", "decrease the voice", "reduce the voice", "sound down",
+           "decrease sound", "decrease the sound", "reduce the sound"):
         return reply("volume_down", amount=-3)
 
     station = find_station(t)
@@ -315,7 +334,8 @@ def timer_result(t):
 # where nobody said them, and once loop for 2 minutes).
 HINT_WORDS = ("play, stop, next station, previous station, volume up, volume down, radio, "
               "weather, time, date, timer, minutes, seconds, plus, minus, times, divided by, "
-              "piano, calculator, home, Vividh Bharati, news, kirtan, bhajan")
+              "piano, calculator, home, Vividh Bharati, news, kirtan, bhajan, "
+              "cricket score, market, stocks")
 
 print(f"Loading Whisper model '{MODEL}' (first time downloads it, please wait)...")
 model = WhisperModel(MODEL, device="cpu", compute_type="int8")
@@ -431,6 +451,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/ping":
             self.send_json({"ok": True})
+        elif self.path in ("/market", "/cricket"):
+            try:
+                self.send_json(market.market_data() if self.path == "/market" else cricket.cricket_data())
+            except Exception as e:                      # the gadget shows "not available"
+                print(f"{self.path} failed: {e}")
+                self.send_json({"error": str(e)}, 502)
         elif re.fullmatch(r"/say/\d+", self.path):
             n = int(self.path.rsplit("/", 1)[1])
             if n >= len(speech_audio):

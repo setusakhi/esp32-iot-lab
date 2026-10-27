@@ -32,12 +32,29 @@ update it there and upload the firmware again.
 | "What's the weather" | Says the weather (Open-Meteo, `VOICE_CITY`) and shows it |
 | "What is 25 times 4", "15 percent of 200", "Square root of 81" | Says the answer |
 | "Timer 5 minutes", "Stop the timer", "Add 2 minutes" | Timer |
+| "Cricket score", "What's the score" | Says the top match and opens the Cricket screen |
+| "Market", "Stocks", "Gold rate", "Reliance price", "Dollar rate" | Says that price and opens the Market screen |
 | "Calculator", "Piano", "Home" | Opens that screen |
 | "Hello", "Thank you", "Who are you" | A friendly reply |
 
 The rules are in `understand()` in `server.py`; station names in `STATIONS` must match
 `src/radio_lists.h` in the firmware. Whisper is told which words to expect (`HINT_WORDS`):
 commands only, because names there made Whisper insert them where nobody said them.
+
+## Market and Cricket screens
+The gadget asks the server for `/market` and `/cricket` (plain HTTP, small JSON), so it never
+needs a secure connection of its own for them.
+
+- **Watchlist:** edit `market.json`. Stock symbols are Yahoo Finance ones (`RELIANCE.NS` for NSE,
+  `^NSEI` for NIFTY 50). Prices come from Yahoo Finance (unofficial) and are about 15 minutes late.
+- **Gold and silver** are the world price converted to rupees (per 10 g / per kg), without
+  Indian import duty and GST, so shop rates are higher.
+- **Mutual funds:** add `{"label": "My fund", "code": 122639}` entries to `funds`. Find a scheme
+  code with `.venv\Scripts\python.exe market.py search parag parikh`. NAVs come from mfapi.in.
+- **Cricket** scores come from Cricbuzz's live-scores page (`cricket.py`); India's matches come first.
+- Test them alone: `.venv\Scripts\python.exe market.py` and `.venv\Scripts\python.exe cricket.py`.
+
+These sources are free but unofficial: if one changes its page, fix it in `market.py` or `cricket.py`.
 
 ## Settings (environment variables, see `start-server.bat`)
 - `VOICE_MODEL`: `small` (default) or `base` (faster, much less accurate)

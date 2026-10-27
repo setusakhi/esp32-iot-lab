@@ -1,7 +1,7 @@
 // ============================================================
 //  ESP32 IoT Lab Gadget
-//  Home menu with: Internet Radio, Calculator, Clock & Weather,
-//  Timer, Piano, WiFi Setup and Voice commands.
+//  Home menu with: Internet Radio, Market, Cricket, Clock & Weather,
+//  Calculator, Timer, Piano, WiFi Setup and Voice commands.
 //  Hardware: ESP32 DevKit V1, 3.5" SPI touch TFT, MAX98357A amp,
 //            MAX9814 microphone, TTP223 touch button, rotary encoder
 // ============================================================
@@ -138,7 +138,8 @@ static void setupTouch() {
 
 // ---------------- Touch button and knob ----------------
 // Touch tap: talk (or silence the alarm). Long touch: stop and go home.
-// Knob: volume (radio on its screen, else beeps and spoken replies);
+// Knob: volume (radio on its screen, else beeps and spoken replies), but on the
+// Market and Cricket screens it flips tabs / pages;
 // press: pause/play on the radio screen, else back to home.
 
 static uint32_t saveVolumeAt = 0;
@@ -167,6 +168,10 @@ static void handleControls() {
   if (steps) Serial.printf("Knob: %+d\n", steps);
   if (steps && current == &radioApp) {
     radioAdjustVolume(steps);
+  } else if (steps && current == &marketApp) {
+    marketKnob(steps);
+  } else if (steps && current == &cricketApp) {
+    cricketKnob(steps);
   } else if (steps) {
     audioSetVolume(constrain((int)audioGetVolume() + steps, 0, 10));
     clickSound();              // a tick at the new volume

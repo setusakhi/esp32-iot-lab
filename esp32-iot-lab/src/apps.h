@@ -11,7 +11,7 @@ struct App {
   void (*redraw)();   // after the screensaver; leave out if enter() only draws
 };
 
-extern App menuApp, radioApp, calcApp, clockApp, timerApp, pianoApp, voiceApp;
+extern App menuApp, radioApp, calcApp, clockApp, timerApp, pianoApp, voiceApp, marketApp, cricketApp;
 
 void goToApp(App *app);     // switch screen (happens after the current loop)
 App *currentApp();
@@ -35,6 +35,10 @@ void radioRequestVolume(int delta);
 // Voice: "stop the timer", "add 2 minutes"
 void timerCancel();
 void timerAddSeconds(uint32_t secs);
+
+// Knob on the Market screen: next / previous tab; on the Cricket screen: next / previous page
+void marketKnob(int steps);
+void cricketKnob(int steps);
 
 // Touch button: open the Voice screen and listen now (from any screen)
 void voiceListenNow();

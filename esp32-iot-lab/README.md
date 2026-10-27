@@ -5,6 +5,8 @@ A touchscreen gadget with a home menu:
 | Tile | What it does |
 |---|---|
 | Radio | Hindi internet radio stations, station list loaded live from radio-browser.info |
+| Market | Stocks (NIFTY 50 on top), gold, silver & currencies, mutual fund NAVs; knob or tabs switch pages |
+| Cricket | Live scores, India's matches first; knob or tap for more matches |
 | Calculator | + − × ÷, %, +/−, DEL, shows the calculation line |
 | Clock & Weather | Big clock synced from the internet, date, live weather (Open-Meteo) |
 | Timer | Countdown with presets; rings on any screen, tap anywhere to stop |
@@ -12,6 +14,8 @@ A touchscreen gadget with a home menu:
 | WiFi Setup | Connect the gadget to a WiFi network from your phone |
 
 Works offline too: Calculator, Timer and Piano don't need internet.
+Market and Cricket get their data through the voice server on the laptop
+(`../voice-server`, watchlist in `market.json`), so keep `start-server.bat` running for them.
 
 ## Wiring
 Same as the touch piano project, nothing new:
@@ -73,6 +77,8 @@ src/app_calc.cpp   calculator
 src/app_clock.cpp  clock & weather
 src/app_timer.cpp  timer
 src/app_piano.cpp  piano
+src/app_market.cpp stocks, gold & currencies, fund NAVs (from the voice server)
+src/app_cricket.cpp cricket scores (from the voice server)
 src/hwtest.cpp     hardware test (env:hwtest)
 src/mictest.cpp    microphone test (env:mictest)
 ```

@@ -60,6 +60,11 @@
 #define WEATHER_LON   75.79
 #define WEATHER_REFRESH_MIN  15
 
+// ---- Market and Cricket screens ----
+// The voice server fetches the data (watchlist in voice-server/market.json)
+#define MARKET_REFRESH_SEC   60
+#define CRICKET_REFRESH_SEC  30
+
 // ---- Internet radio ----
 #define RADIO_LANGUAGE        "hindi"   // station list comes from radio-browser.info
 #define RADIO_MAX_STATIONS    24

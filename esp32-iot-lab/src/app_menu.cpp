@@ -1,10 +1,10 @@
-// Home screen: 6 big tiles
+// Home screen: 8 big tiles
 #include "apps.h"
 #include "tones.h"
 #include "net.h"
 #include "gadget_config.h"
 
-enum Icon { ICON_RADIO, ICON_CALC, ICON_CLOCK, ICON_TIMER, ICON_PIANO, ICON_WIFI };
+enum Icon { ICON_RADIO, ICON_CALC, ICON_CLOCK, ICON_TIMER, ICON_PIANO, ICON_WIFI, ICON_MARKET, ICON_CRICKET };
 
 struct Tile {
   Rect        r;
@@ -16,12 +16,14 @@ struct Tile {
 };
 
 static Tile tiles[] = {
-  {{6,   52, 150, 126}, "Radio",      "Hindi FM",   0xE267, ICON_RADIO, &radioApp},
-  {{165, 52, 150, 126}, "Calculator", nullptr,      0x34DB, ICON_CALC,  &calcApp},
-  {{324, 52, 150, 126}, "Clock",      "& Weather",  0xF4E2, ICON_CLOCK, &clockApp},
-  {{6,  186, 150, 126}, "Timer",      nullptr,      0x9AD6, ICON_TIMER, &timerApp},
-  {{165,186, 150, 126}, "Piano",      nullptr,      0x256C, ICON_PIANO, &pianoApp},
-  {{324,186, 150, 126}, "WiFi Setup", nullptr,      0x324B, ICON_WIFI,  nullptr},
+  {{6,   52, 114, 126}, "Radio",      "Hindi FM",     0xE267, ICON_RADIO,   &radioApp},
+  {{124, 52, 114, 126}, "Market",     "Stocks & Gold", 0x1B8F, ICON_MARKET,  &marketApp},
+  {{242, 52, 114, 126}, "Cricket",    "Live scores",  0x2C49, ICON_CRICKET, &cricketApp},
+  {{360, 52, 114, 126}, "Clock",      "& Weather",    0xF4E2, ICON_CLOCK,   &clockApp},
+  {{6,  186, 114, 126}, "Calculator", nullptr,        0x34DB, ICON_CALC,    &calcApp},
+  {{124,186, 114, 126}, "Timer",      nullptr,        0x9AD6, ICON_TIMER,   &timerApp},
+  {{242,186, 114, 126}, "Piano",      nullptr,        0x256C, ICON_PIANO,   &pianoApp},
+  {{360,186, 114, 126}, "WiFi",       "Setup",        0x324B, ICON_WIFI,    nullptr},
 };
 static const int TILE_COUNT = sizeof(tiles) / sizeof(tiles[0]);
 static const Rect VOICE_BTN = {130, 5, 104, 34};   // in the top bar
@@ -72,6 +74,20 @@ static void drawIcon(Icon icon, int cx, int cy, uint16_t bg) {
       tft.drawArc(cx, cy + 22, 16, 9, 135, 225, W, bg, false);
       tft.fillCircle(cx, cy + 22, 5, W);
       break;
+    case ICON_MARKET:                                  // bars with a rising arrow
+      tft.fillRect(cx - 30, cy + 6, 12, 24, W);
+      tft.fillRect(cx - 12, cy - 6, 12, 36, W);
+      tft.fillRect(cx + 6,  cy - 18, 12, 48, W);
+      tft.drawWideLine(cx - 32, cy - 6, cx - 4, cy - 26, 4, TFT_GREEN, bg);
+      tft.drawWideLine(cx - 4, cy - 26, cx + 22, cy - 34, 4, TFT_GREEN, bg);
+      tft.fillTriangle(cx + 30, cy - 37, cx + 18, cy - 42, cx + 22, cy - 28, TFT_GREEN);
+      break;
+    case ICON_CRICKET:                                 // bat and ball
+      tft.drawWideLine(cx - 22, cy + 26, cx + 12, cy - 22, 12, W, bg);
+      tft.drawWideLine(cx + 14, cy - 25, cx + 22, cy - 36, 5, 0xC618, bg);   // handle
+      tft.fillCircle(cx + 22, cy + 20, 9, TFT_RED);
+      tft.drawFastHLine(cx + 15, cy + 20, 14, TFT_WHITE);
+      break;
   }
 }
 
@@ -82,11 +98,12 @@ static void drawTile(const Tile &t) {
   tft.setTextColor(TFT_WHITE);
   tft.setTextDatum(MC_DATUM);
   tft.setTextPadding(0);
+  uint8_t font = tft.textWidth(t.label, 4) <= t.r.w - 8 ? 4 : 2;   // "Calculator" needs the small font
   if (t.sublabel) {
-    tft.drawString(t.label, cx, t.r.y + 94, 4);
+    tft.drawString(t.label, cx, t.r.y + 94, font);
     tft.drawString(t.sublabel, cx, t.r.y + 114, 2);
   } else {
-    tft.drawString(t.label, cx, t.r.y + 100, 4);
+    tft.drawString(t.label, cx, t.r.y + 100, font);
   }
 }
 

@@ -43,14 +43,35 @@ static void drawMic(uint16_t color) {
   tft.fillRect(MIC_X - 14, MIC_Y + 30, 28, 4, TFT_WHITE);
 }
 
+// The reply in big letters; a long one ("Jaipur: 24 degrees, clear sky...") is split
+// over two lines at a space, or drawn small if even that is too wide.
 static void drawLines(const char *line1, uint16_t col1, const char *line2 = "") {
-  tft.fillRect(0, 196, SCREEN_W, 64, COL_BG);
+  const int maxW = SCREEN_W - 16;
+  tft.fillRect(0, 186, SCREEN_W, 92, COL_BG);
   tft.setTextDatum(MC_DATUM);
   tft.setTextPadding(0);
   tft.setTextColor(col1);
-  tft.drawString(line1, SCREEN_W / 2, 212, 4);
+  int heardY = 244;
+  if (tft.textWidth(line1, 4) <= maxW) {
+    tft.drawString(line1, SCREEN_W / 2, 212, 4);
+  } else {
+    String s = line1;
+    int mid = s.length() / 2, cut = -1;
+    for (int d = 0; d <= mid && cut < 0; d++) {     // the space nearest the middle
+      if (mid + d < (int)s.length() && s[mid + d] == ' ') cut = mid + d;
+      else if (mid - d > 0 && s[mid - d] == ' ') cut = mid - d;
+    }
+    String a = cut > 0 ? s.substring(0, cut) : s, b = cut > 0 ? s.substring(cut + 1) : String();
+    if (cut > 0 && tft.textWidth(a, 4) <= maxW && tft.textWidth(b, 4) <= maxW) {
+      tft.drawString(a, SCREEN_W / 2, 202, 4);
+      tft.drawString(b, SCREEN_W / 2, 230, 4);
+      heardY = 258;
+    } else {
+      tft.drawString(line1, SCREEN_W / 2, 212, 2);
+    }
+  }
   tft.setTextColor(COL_DIM);
-  tft.drawString(line2, SCREEN_W / 2, 244, 2);
+  tft.drawString(line2, SCREEN_W / 2, heardY, 2);
 }
 
 static bool isAscii(const char *s) {
@@ -64,7 +85,7 @@ static void voiceEnter() {
   drawLines("Tap the mic and speak", TFT_WHITE, "or touch the talk button");
   tft.setTextColor(COL_DIM);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("Try: \"Play Vividh Bharati\"  \"Next station\"  \"What time is it\"  \"25 times 4\"",
+  tft.drawString("Try: \"Play Vividh Bharati\"  \"Cricket score\"  \"Gold rate\"",
                  SCREEN_W / 2, 296, 2);
   nextApp = nullptr;
 
@@ -155,6 +176,8 @@ static void sendAndAct() {
   else if (!strcmp(action, "timer_cancel")) timerCancel();
   else if (!strcmp(action, "calculator")) nextApp = &calcApp;
   else if (!strcmp(action, "piano"))  nextApp = &pianoApp;
+  else if (!strcmp(action, "market")) nextApp = &marketApp;
+  else if (!strcmp(action, "cricket")) nextApp = &cricketApp;
   else if (!strcmp(action, "menu") || !strcmp(action, "stop")) nextApp = &menuApp;
   // "answer" (sums, hello...), volume, timer stop: stay, or go back to where we were
   if (!nextApp && returnApp) {

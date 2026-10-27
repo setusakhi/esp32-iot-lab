@@ -1,0 +1,17 @@
+{
+  "_help": "Watchlist for the gadget's Market screen. Stock symbols are Yahoo Finance ones (NSE = .NS). Funds use AMFI scheme codes: find them with  .venv\\Scripts\\python.exe market.py search parag parikh",
+  "stocks": [
+    {"label": "NIFTY 50",       "symbol": "^NSEI", "highlight": true},
+    {"label": "Reliance",       "symbol": "RELIANCE.NS"},
+    {"label": "Tata Motors PV", "symbol": "TMPV.NS"},
+    {"label": "Tata Motors CV", "symbol": "TMCV.NS"},
+    {"label": "BEML",           "symbol": "BEML.NS"},
+    {"label": "Maruti",         "symbol": "MARUTI.NS"}
+  ],
+  "currencies": [
+    {"label": "USD / INR", "symbol": "USDINR=X"},
+    {"label": "EUR / INR", "symbol": "EURINR=X"},
+    {"label": "GBP / INR", "symbol": "GBPINR=X"}
+  ],
+  "funds": []
+}
