@@ -36,10 +36,24 @@ update it there and upload the firmware again.
 | "Market", "Stocks", "Gold rate", "Reliance price", "Dollar rate" | Says that price and opens the Market screen |
 | "Calculator", "Piano", "Home" | Opens that screen |
 | "Hello", "Thank you", "Who are you" | A friendly reply |
+| "Why is the sky blue?", "Tell me a joke", any other question | The AI buddy answers (see below) |
 
 The rules are in `understand()` in `server.py`; station names in `STATIONS` must match
 `src/radio_lists.h` in the firmware. Whisper is told which words to expect (`HINT_WORDS`):
 commands only, because names there made Whisper insert them where nobody said them.
+
+## AI buddy (general questions)
+Anything that is not a gadget command, like "Why is the sky blue?" or "Tell me a joke", is
+answered by a small model running in [Ollama](https://ollama.com) on this laptop (`assistant.py`):
+free, and nothing leaves the computer. Answers are one or two short sentences, spoken and shown
+on the gadget; follow-ups work ("How old was she then?") for a few minutes.
+
+- Install once: `winget install Ollama.Ollama`, then `ollama pull llama3.2:3b`. Ollama starts
+  by itself with Windows (tray icon); the voice server pre-loads the model at start.
+- Takes about 4-6 s per answer on a laptop CPU, plus speech recognition.
+- A small model makes fact mistakes sometimes; it is told to say "not sure" rather than guess.
+- Test alone: `.venv\Scripts\python.exe assistant.py "who wrote the Gita"`
+- Settings: `VOICE_AI_MODEL` (default `llama3.2:3b`), `VOICE_OLLAMA_URL` (default `http://localhost:11434`)
 
 ## Market and Cricket screens
 The gadget asks the server for `/market` and `/cricket` (plain HTTP, small JSON), so it never

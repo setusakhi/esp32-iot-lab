@@ -27,7 +27,9 @@
 // ---- Voice commands (voice-server/server.py on your laptop) ----
 // Your laptop's WiFi address (ipconfig) and the server port
 #define VOICE_SERVER_URL   "http://192.168.1.8:5005"
-#define VOICE_RECORD_SECS  3
+// The most it records: it stops earlier when you stop talking. Falls back to a
+// shorter time by itself if the memory for 6 s isn't free.
+#define VOICE_RECORD_SECS  6
 
 // ---- Screensaver: clock and night sky after this many minutes without input ----
 // The radio keeps playing; any touch, the touch button or the knob wakes the screen.

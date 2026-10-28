@@ -43,11 +43,31 @@ static void drawMic(uint16_t color) {
   tft.fillRect(MIC_X - 14, MIC_Y + 30, 28, 4, TFT_WHITE);
 }
 
+// Splits text into lines of at most maxW pixels in the given font, breaking at spaces.
+// Returns how many lines it used (at most maxLines; the last one ends in "..." if cut).
+static int wrapText(const String &s, uint8_t font, int maxW, String *lines, int maxLines) {
+  int count = 0, start = 0;
+  while (start < (int)s.length() && count < maxLines) {
+    int end = start, lastSpace = -1;
+    while (end < (int)s.length() && tft.textWidth(s.substring(start, end + 1), font) <= maxW) {
+      if (s[end] == ' ') lastSpace = end;
+      end++;
+    }
+    if (end < (int)s.length() && lastSpace > start) end = lastSpace;   // break at a word
+    lines[count++] = s.substring(start, end);
+    start = end;
+    while (start < (int)s.length() && s[start] == ' ') start++;
+  }
+  if (start < (int)s.length() && count > 0) lines[count - 1] += "...";
+  return count;
+}
+
 // The reply in big letters; a long one ("Jaipur: 24 degrees, clear sky...") is split
-// over two lines at a space, or drawn small if even that is too wide.
+// over two lines at a space. An AI answer too long even for that is shown in small
+// letters over up to four lines.
 static void drawLines(const char *line1, uint16_t col1, const char *line2 = "") {
   const int maxW = SCREEN_W - 16;
-  tft.fillRect(0, 186, SCREEN_W, 92, COL_BG);
+  tft.fillRect(0, 186, SCREEN_W, 100, COL_BG);    // down to just above the hint line
   tft.setTextDatum(MC_DATUM);
   tft.setTextPadding(0);
   tft.setTextColor(col1);
@@ -67,7 +87,10 @@ static void drawLines(const char *line1, uint16_t col1, const char *line2 = "") 
       tft.drawString(b, SCREEN_W / 2, 230, 4);
       heardY = 258;
     } else {
-      tft.drawString(line1, SCREEN_W / 2, 212, 2);
+      String lines[4];
+      int n = wrapText(s, 2, maxW, lines, 4);
+      for (int i = 0; i < n; i++) tft.drawString(lines[i], SCREEN_W / 2, 196 + i * 18, 2);
+      heardY = 196 + n * 18 + 6;
     }
   }
   tft.setTextColor(COL_DIM);
@@ -90,8 +113,8 @@ static void voiceEnter() {
   nextApp = nullptr;
 
   // Reserved only while this screen is open: the radio needs that memory for its
-  // decoders (kept permanently, every station failed to start). In mu-law, 3 s is
-  // 48 KB, which still fits after the radio has played (a 16-bit 96 KB one did not).
+  // decoders (kept permanently, every station failed to start). In mu-law, 1 s is
+  // 16 KB; if 6 s (96 KB) isn't free in one piece after the radio, it tries shorter.
   for (int secs = VOICE_RECORD_SECS; secs >= 2 && !recording; secs--) {
     recordLen = MIC_SAMPLE_RATE * secs;
     recording = (uint8_t *)malloc(recordLen);
@@ -128,16 +151,16 @@ static void changeVolume(int amount, bool forRadio) {
   prefs.end();
 }
 
-// Sends the recording to the laptop and acts on the answer
-static void sendAndAct() {
+// Sends the recording (samples long) to the laptop and acts on the answer
+static void sendAndAct(int samples) {
   drawMic(TFT_ORANGE);
   drawLines("Thinking...", TFT_YELLOW);
 
   HTTPClient http;
   http.begin(VOICE_SERVER_URL "/listen");
   http.addHeader("Content-Type", "audio/basic");   // 8-bit mu-law
-  http.setTimeout(20000);
-  int code = http.POST(recording, recordLen);
+  http.setTimeout(45000);              // an AI buddy answer can take 10-20 s on the laptop
+  int code = http.POST(recording, samples);
   String body = code == 200 ? http.getString() : String();
   http.end();
 
@@ -195,9 +218,10 @@ static void listen() {
   delay(200);                          // so the beep is not recorded
   drawMic(TFT_RED);
   drawLines("Listening...", TFT_RED, "Speak now");
-  micRecord(recording, recordLen);
+  int samples = micRecordSpeech(recording, recordLen);   // stops when you stop talking
+  Serial.printf("Voice: recorded %.1f s\n", samples / (float)MIC_SAMPLE_RATE);
   audioPlayNote(660, 60);
-  sendAndAct();
+  sendAndAct(samples);
 }
 
 static void voiceUpdate() {

@@ -9,3 +9,8 @@
 
 void micBegin();                          // call once in setup()
 void micRecord(uint8_t *ulaw, int count); // records count samples
+
+// Records up to maxCount samples but stops about 0.8 s after you stop talking,
+// so short commands stay quick and long questions are not cut off.
+// Returns how many samples were recorded.
+int micRecordSpeech(uint8_t *ulaw, int maxCount);

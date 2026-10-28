@@ -11,6 +11,8 @@ POSTs it here; Whisper turns it into text and we work out the command.
   GET  /cricket  cricket scores for the Cricket screen (see cricket.py)
   GET  /ping     reply = {"ok": true}
 
+Questions that are not gadget commands go to the AI buddy (assistant.py, a local model in Ollama).
+
 Everything runs locally: no audio leaves this computer (the weather comes from Open-Meteo,
 prices from Yahoo Finance and mfapi.in, cricket scores from Cricbuzz).
 Start it with:  start-server.bat
@@ -33,6 +35,7 @@ import numpy as np
 import requests
 from faster_whisper import WhisperModel
 
+import assistant
 import cricket
 import market
 
@@ -72,6 +75,8 @@ INTENTS = [  # checked in this order
 ]
 ALL_KEYWORDS = {w for _, words in INTENTS for w in words}
 TIME_UNIT = re.compile(r"\bmin|minute|second|\bsec|मिनट")
+QUESTION = re.compile(r"(who|what|why|how|when|where|which|whose|tell me|explain|"
+                      r"is|are|can|could|do|does|did|should|will)\b")
 
 REPLIES = {  # shown on the gadget and spoken; made once at start
     "stop": "Stopping",
@@ -298,8 +303,10 @@ def understand(text):
            "decrease sound", "decrease the sound", "reduce the sound"):
         return reply("volume_down", amount=-3)
 
+    # A station name plays when the radio is asked for, or when it is said alone
+    # ("Vividh Bharati"); "tell me something about Jaipur" is a question, not Jaipur Radio.
     station = find_station(t)
-    if station:
+    if station and (has(t, "play", "radio", "station", "listen", "tune", "put on") or len(words) <= 3):
         return station
 
     # Spoken answers; the gadget also opens its clock screen
@@ -310,6 +317,11 @@ def understand(text):
     if has(t, "time", "clock", "baje", "samay"):
         return reply("time", time_answer())
 
+    # A real question goes to the AI buddy, even if it contains a screen word:
+    # "who built the Hawa Mahal" was heard as "who built the home hall" and went home.
+    if QUESTION.match(t) and len(words) >= 4 and not TIME_UNIT.search(t):
+        return reply("answer", assistant.ask(text.strip()))
+
     # Screens
     for action, keywords in INTENTS:
         if any(matches(k, t, words) for k in keywords):
@@ -318,6 +330,11 @@ def understand(text):
             return reply(action)
     if TIME_UNIT.search(t) and find_seconds(t):            # just "5 minutes"
         return timer_result(t)
+
+    # Anything else is a question for the AI buddy. One or two words ("and") are
+    # usually a misheard command, so those still get "Sorry, I did not understand".
+    if len(words) >= 3:
+        return reply("answer", assistant.ask(text.strip()))
     return reply("unknown")
 
 
@@ -342,6 +359,27 @@ model = WhisperModel(MODEL, device="cpu", compute_type="int8")
 print("Model ready")
 
 
+def drop_repeats(text):
+    """Whisper sometimes loops on unclear audio: 'sky blue, sky blue, sky blue, ...'.
+    A phrase of 1-4 words said three or more times in a row is kept only once."""
+    words = text.split()
+    for size in range(1, 5):
+        out, i = [], 0
+        while i < len(words):
+            chunk = [w.strip(".,!?").lower() for w in words[i:i + size]]
+            repeats = 1
+            while [w.strip(".,!?").lower() for w in words[i + repeats * size:i + (repeats + 1) * size]] == chunk:
+                repeats += 1
+            if repeats >= 3 and len(chunk) == size:
+                out.extend(words[i:i + size])
+                i += repeats * size
+            else:
+                out.append(words[i])
+                i += 1
+        words = out
+    return " ".join(words).rstrip(",")
+
+
 def transcribe(pcm_bytes):
     audio = np.frombuffer(pcm_bytes, dtype="<i2").astype(np.float32) / 32768.0
     peak = float(np.max(np.abs(audio))) if audio.size else 0.0
@@ -353,7 +391,7 @@ def transcribe(pcm_bytes):
     options = dict(beam_size=1, temperature=0.0, without_timestamps=True,
                    condition_on_previous_text=False, max_new_tokens=40, hotwords=HINT_WORDS)
     segments, info = model.transcribe(audio, language=LANGUAGE or None, **options)
-    text = " ".join(s.text.strip() for s in segments).strip()
+    text = drop_repeats(" ".join(s.text.strip() for s in segments).strip())
     if LANGUAGE is None and info.language not in ("hi", "en"):
         # Hindi is often detected as Urdu (Arabic script): ask for Hindi
         segments, _ = model.transcribe(audio, language="hi", **options)
@@ -506,5 +544,6 @@ if __name__ == "__main__":
     print("Preparing spoken replies...")
     for text in REPLIES.values():
         speech_for(text)
+    assistant.warm_up()
     print(f"Voice server listening on port {PORT} (Ctrl+C to stop)")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

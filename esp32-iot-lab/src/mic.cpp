@@ -20,8 +20,26 @@ static uint8_t toUlaw(int sample) {
   return ~(sign | (exponent << 4) | mantissa);
 }
 
+static int micRecordUntil(uint8_t *ulaw, int count, bool stopOnSilence);
+
 void micRecord(uint8_t *ulaw, int count) {
+  micRecordUntil(ulaw, count, false);
+}
+
+int micRecordSpeech(uint8_t *ulaw, int maxCount) {
+  return micRecordUntil(ulaw, maxCount, true);
+}
+
+// The recorder behind both: with stopOnSilence it measures the loudness of every
+// 0.1 s block, learns the room's background level from the first 0.3 s, and stops
+// once speech has been heard and then 0.8 s in a row were quiet again.
+static int micRecordUntil(uint8_t *ulaw, int count, bool stopOnSilence) {
+  const int BLOCK = MIC_SAMPLE_RATE / 10;            // 0.1 s
+  const int QUIET_BLOCKS_TO_STOP = 8;                 // 0.8 s
   const uint32_t period = 1000000UL / MIC_SAMPLE_RATE;
+  float noise = 0, level = 0;
+  int blocks = 0, quiet = 0;
+  bool heardSpeech = false;
   float prevIn = adc1_get_raw(MIC_ADC_CHANNEL) * 8.0f, prevOut = 0;
   uint32_t next = micros();
   for (int i = 0; i < count; i++) {
@@ -33,5 +51,20 @@ void micRecord(uint8_t *ulaw, int count) {
     prevIn = x;
     prevOut = y;
     ulaw[i] = toUlaw((int)constrain(y, -32767.0f, 32767.0f));
+
+    if (!stopOnSilence) continue;
+    level += fabsf(y);
+    if ((i + 1) % BLOCK) continue;
+    level /= BLOCK;                                    // average loudness of this block
+    if (++blocks <= 3) {                               // first 0.3 s: the room's background
+      noise += level / 3;
+    } else if (level > noise * 2.5f + 150) {           // clearly louder than the room: talking
+      heardSpeech = true;
+      quiet = 0;
+    } else if (heardSpeech && ++quiet >= QUIET_BLOCKS_TO_STOP) {
+      return i + 1;
+    }
+    level = 0;
   }
+  return count;
 }
